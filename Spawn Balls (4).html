@@ -1,0 +1,176 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Spawn Balls</title>
+<style>
+  :root { color-scheme: dark; --bg:#000; --fg:#cfcfcf; }
+  html, body { margin:0; height:100%; background:var(--bg); overflow:hidden; }
+  canvas { display:block; width:100%; height:100%; touch-action:none; }
+  #hud { position:fixed; left:12px; top:calc(env(safe-area-inset-top, 0px) + 10px);
+         color:var(--fg); font:16px system-ui, sans-serif; pointer-events:none; }
+  #hint { position:fixed; left:0; right:0; bottom:calc(env(safe-area-inset-bottom, 0px) + 20px);
+          text-align:center; color:var(--fg); font:16px system-ui, sans-serif; pointer-events:none; transition:opacity .6s; }
+  #clear { position:fixed; right:12px; top:calc(env(safe-area-inset-top, 0px) + 8px);
+           background:#222; color:var(--fg); border:1px solid #555; border-radius:8px; padding:6px 12px; font:15px system-ui, sans-serif; }
+  #motion { position:fixed; left:50%; transform:translateX(-50%); bottom:calc(env(safe-area-inset-bottom, 0px) + 60px);
+            background:#0b6; color:#fff; border:0; border-radius:24px; padding:12px 22px; font:600 16px system-ui, sans-serif; }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div id="hud">Balls: 0</div>
+<button id="clear">Clear</button>
+<button id="motion">Enable motion sensor</button>
+<div id="hint">Tap for a few balls. Hold for lots. Shake to scatter.</div>
+<script>
+(function () {
+  var cv = document.getElementById('c'), ctx = cv.getContext('2d');
+  var hud = document.getElementById('hud'), hint = document.getElementById('hint');
+  var W, H, dpr;
+  function resize() {
+    dpr = window.devicePixelRatio || 1;
+    W = window.innerWidth; H = window.innerHeight;
+    cv.width = W * dpr; cv.height = H * dpr;
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  }
+  resize(); window.addEventListener('resize', resize);
+
+  var COLORS = ['#ff5555', '#ffeb3b', '#00c853', '#d500f9', '#8d6e63', '#000000'];
+  var G = 900, BOUNCE = 0.75, MAX = 1200, TAP = 3, BASE_RATE = 60;
+  var balls = [];
+  var gx = 0, gy = G, tgx = 0, tgy = G, flip = 1, gotMotion = false;
+  var mBtn = document.getElementById('motion');
+  function onMotion(e) {
+    var a = e.accelerationIncludingGravity;
+    if (!a || a.x == null || a.y == null) return;
+    gotMotion = true; mBtn.style.display = 'none'; motionWorks = true;
+    var mag = Math.sqrt(a.x * a.x + a.y * a.y + (a.z || 0) * (a.z || 0));
+    var nowT = performance.now();
+    if (Math.abs(mag - 9.8) > 12 && nowT - lastShake > 400) { lastShake = nowT; scatter(); }
+    var dx = -a.x * flip, dy = -a.y * flip;   // gravity in device coords (y up)
+    var ang = (screen.orientation && screen.orientation.angle) || window.orientation || 0;
+    ang = ((ang % 360) + 360) % 360;
+    var sx, sy;
+    if (ang === 90) { sx = -dy; sy = -dx; }
+    else if (ang === 270) { sx = dy; sy = dx; }
+    else if (ang === 180) { sx = -dx; sy = dy; }
+    else { sx = dx; sy = -dy; }
+    tgx = sx / 9.8 * G; tgy = sy / 9.8 * G;
+  }
+  var motionWorks = false, lastShake = 0;
+  function scatter() {
+    for (var i = 0; i < balls.length; i++) {
+      balls[i].vx += rnd(-900, 900); balls[i].vy += rnd(-1100, 300);
+    }
+  }
+  function onOrient(e) {
+    if (motionWorks || e.beta == null || e.gamma == null) return;
+    gotMotion = true; mBtn.style.display = 'none';
+    var b = e.beta * Math.PI / 180, g = e.gamma * Math.PI / 180;
+    tgx = Math.sin(g) * G; tgy = Math.sin(b) * G;
+  }
+  mBtn.addEventListener('click', function () {
+    var go = function () {
+      window.addEventListener('devicemotion', onMotion);
+      window.addEventListener('deviceorientation', onOrient);
+      setTimeout(function () {
+        if (!gotMotion) { mBtn.textContent = 'Sensor blocked here. Open the link in Chrome or Safari'; }
+      }, 1500);
+    };
+    if (typeof DeviceMotionEvent !== 'undefined' && typeof DeviceMotionEvent.requestPermission === 'function') {
+      if (/iPhone|iPad|iPod/.test(navigator.userAgent)) flip = -1;  // iOS reports the opposite sign
+      DeviceMotionEvent.requestPermission().then(function (r) {
+        if (r === 'granted') go(); else mBtn.textContent = 'Permission denied';
+      }).catch(function () {
+        mBtn.textContent = window.isSecureContext ? 'Permission denied' : 'Open the https link, not a saved file';
+      });
+    } else { go(); }
+  });
+  var touches = {};  // pointerId -> {x, y, t, acc}
+
+  function rnd(a, b) { return a + Math.random() * (b - a); }
+  function spawn(x, y) {
+    if (balls.length >= MAX) balls.shift();
+    balls.push({
+      x: x + rnd(-10, 10), y: y + rnd(-10, 10), r: rnd(3, 6),
+      vx: rnd(-250, 250), vy: rnd(-400, 50),
+      c: COLORS[Math.floor(Math.random() * COLORS.length)]
+    });
+  }
+
+  cv.addEventListener('pointerdown', function (e) {
+    cv.setPointerCapture(e.pointerId);
+    touches[e.pointerId] = { x: e.clientX, y: e.clientY, t: 0, acc: 0 };
+    for (var i = 0; i < TAP; i++) spawn(e.clientX, e.clientY);
+    hint.style.opacity = 0;
+  });
+  cv.addEventListener('pointermove', function (e) {
+    var t = touches[e.pointerId]; if (t) { t.x = e.clientX; t.y = e.clientY; }
+  });
+  function end(e) { delete touches[e.pointerId]; }
+  cv.addEventListener('pointerup', end);
+  cv.addEventListener('pointercancel', end);
+  document.getElementById('clear').addEventListener('click', function () { balls = []; });
+
+  function collide() {
+    for (var i = 0; i < balls.length; i++) {
+      var a = balls[i];
+      for (var j = i + 1; j < balls.length; j++) {
+        var b = balls[j], dx = b.x - a.x, dy = b.y - a.y, md = a.r + b.r;
+        if (Math.abs(dx) > md || Math.abs(dy) > md) continue;
+        var d = Math.sqrt(dx * dx + dy * dy);
+        if (d > 0 && d < md) {
+          var nx = dx / d, ny = dy / d, o = (md - d) / 2;
+          a.x -= nx * o; a.y -= ny * o; b.x += nx * o; b.y += ny * o;
+          var rel = ((a.vx - b.vx) * nx + (a.vy - b.vy) * ny);
+          if (rel > 0) {
+            rel *= BOUNCE;
+            a.vx -= rel * nx; a.vy -= rel * ny; b.vx += rel * nx; b.vy += rel * ny;
+          }
+        }
+      }
+    }
+  }
+
+  var last = performance.now();
+  function frame(now) {
+    var dt = Math.min((now - last) / 1000, 0.033); last = now;
+
+    // holding longer -> faster and more balls
+    gx += (tgx - gx) * Math.min(1, dt * 12);
+    gy += (tgy - gy) * Math.min(1, dt * 12);
+    for (var id in touches) {
+      var t = touches[id];
+      t.t += dt;
+      t.acc += BASE_RATE * (1 + t.t * 1.5) * dt;
+      while (t.acc >= 1) { spawn(t.x, t.y); t.acc -= 1; }
+    }
+
+    for (var i = 0; i < balls.length; i++) {
+      var b = balls[i];
+      b.vx += gx * dt; b.vy += gy * dt; b.x += b.vx * dt; b.y += b.vy * dt;
+      if (b.x < b.r) { b.x = b.r; b.vx = -b.vx * BOUNCE; }
+      else if (b.x > W - b.r) { b.x = W - b.r; b.vx = -b.vx * BOUNCE; }
+      if (b.y > H - b.r) { b.y = H - b.r; b.vy = -b.vy * BOUNCE; b.vx *= 0.98; }
+      else if (b.y < b.r) { b.y = b.r; b.vy = -b.vy * BOUNCE; }
+    }
+    collide();
+
+    ctx.fillStyle = '#000';
+    ctx.fillRect(0, 0, W, H);
+    for (var k = 0; k < balls.length; k++) {
+      var p = balls[k];
+      ctx.beginPath(); ctx.arc(p.x, p.y, p.r, 0, Math.PI * 2);
+      ctx.fillStyle = p.c; ctx.fill();
+      if (p.c === '#000000') { ctx.strokeStyle = '#fff'; ctx.lineWidth = 1; ctx.stroke(); }
+    }
+    hud.textContent = 'Balls: ' + balls.length;
+    requestAnimationFrame(frame);
+  }
+  requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>
